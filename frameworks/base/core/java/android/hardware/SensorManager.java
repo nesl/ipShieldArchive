@@ -22,6 +22,7 @@ import android.util.SparseArray;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 
 /**
@@ -429,7 +430,14 @@ public abstract class SensorManager {
         List<Sensor> l = getSensorList(type);
         return l.isEmpty() ? null : l.get(0);
     }
+    /**
+     * 
+     * @param pkgName
+     * @return the set of sensors being used by the package
+     */
 
+    public abstract HashSet<Sensor> getSensorsForPkg(String pkgName);
+    
     /**
      * Registers a listener for given sensors.
      *

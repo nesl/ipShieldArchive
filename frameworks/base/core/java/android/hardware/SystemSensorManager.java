@@ -16,6 +16,7 @@
 
 package android.hardware;
 
+import android.content.Context;
 import android.os.Looper;
 import android.os.Process;
 import android.os.Handler;
@@ -26,6 +27,9 @@ import android.util.SparseBooleanArray;
 import android.util.SparseIntArray;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 
 /**
@@ -53,6 +57,10 @@ public class SystemSensorManager extends SensorManager {
 
     // Looper associated with the context in which this instance was created.
     final Looper mMainLooper;
+    
+    // Context in which this instance was created
+    final Context mContext;
+    static HashMap<String, HashSet<ListenerDelegate>> pkgToListenerMap = new HashMap<String, HashSet<ListenerDelegate>>();
 
     /*-----------------------------------------------------------------------*/
 
@@ -244,13 +252,49 @@ public class SystemSensorManager extends SensorManager {
             mHandler.sendMessage(msg);
         }
     }
-
+    
     /**
      * {@hide}
      */
     public SystemSensorManager(Looper mainLooper) {
         mMainLooper = mainLooper;
+        mContext = null;
+        
+        synchronized(sListeners) {
+            if (!sSensorModuleInitialized) {
+                sSensorModuleInitialized = true;
 
+                nativeClassInit();
+
+                // initialize the sensor list
+                sensors_module_init();
+                final ArrayList<Sensor> fullList = sFullSensorsList;
+                int i = 0;
+                do {
+                    Sensor sensor = new Sensor();
+                    i = sensors_module_get_next_sensor(sensor, i);
+
+                    if (i>=0) {
+                        //Log.d(TAG, "found sensor: " + sensor.getName() +
+                        //        ", handle=" + sensor.getHandle());
+                        fullList.add(sensor);
+                        sHandleToSensor.append(sensor.getHandle(), sensor);
+                    }
+                } while (i>0);
+
+                sPool = new SensorEventPool( sFullSensorsList.size()*2 );
+                sSensorThread = new SensorThread();
+            }
+        }
+    }
+
+    /**
+     * {@hide}
+     */
+    // Added to get the context associated with this instance of the SensorManager
+    public SystemSensorManager(Context ctx, Looper mainLooper) {
+        mMainLooper = mainLooper;
+        mContext = ctx;
         synchronized(sListeners) {
             if (!sSensorModuleInitialized) {
                 sSensorModuleInitialized = true;
@@ -315,8 +359,10 @@ public class SystemSensorManager extends SensorManager {
     protected boolean registerListenerImpl(SensorEventListener listener, Sensor sensor,
             int delay, Handler handler) {
         boolean result = true;
+        
         synchronized (sListeners) {
             // look for this listener in our list
+        	// pkgToListenerMap already has the ListernerDelegate object in the HashSet
             ListenerDelegate l = null;
             for (ListenerDelegate i : sListeners) {
                 if (i.getListener() == listener) {
@@ -329,20 +375,65 @@ public class SystemSensorManager extends SensorManager {
             if (l == null) {
                 l = new ListenerDelegate(listener, sensor, handler);
                 sListeners.add(l);
+                
+                if(mContext != null) {
+                	String pkgName = mContext.getPackageName();
+                	if(pkgToListenerMap.get(pkgName) == null)
+                		pkgToListenerMap.put(pkgName,new HashSet<ListenerDelegate>());
+
+                	// Checking if the pkgName has been added 
+                	if(pkgToListenerMap.get(pkgName) != null) {
+                		pkgToListenerMap.get(pkgName).add(l); // since hashset we do not check explicitly for duplicates
+                		Log.d(TAG, "Printing Current PkgToSensorMap");
+                		for(String pName:pkgToListenerMap.keySet()) {
+                			HashSet<ListenerDelegate> hSet = (HashSet<ListenerDelegate>)pkgToListenerMap.get(pName);
+                			for(ListenerDelegate listenerDel: hSet) {
+                				for(Sensor s: listenerDel.getSensors()) {
+                					Log.d(TAG, "pkgName" + pName + ": SensorName" + s.getName());
+                				}
+                			}
+                		}
+                	}
+                }
                 // if the list is not empty, start our main thread
                 if (!sListeners.isEmpty()) {
                     if (sSensorThread.startLocked()) {
                         if (!enableSensorLocked(sensor, delay)) {
                             // oops. there was an error
                             sListeners.remove(l);
+                            // Remove the added ListenerDelegate object from the map
+                            if(pkgToListenerMap.get(pkgName) != null) {
+                            	if(!pkgToListenerMap.get(pkgName).isEmpty()) {
+                            		pkgToListenerMap.get(pkgName).remove(l);
+                            		if(pkgToListenerMap.get(pkgName).isEmpty())
+                            			pkgToListenerMap.remove(pkgName);
+                            	}
+                            }
                             result = false;
                         }
                     } else {
                         // there was an error, remove the listener
                         sListeners.remove(l);
+                            // Remove the added ListenerDelegate object from the map
+                        if(pkgToListenerMap.get(pkgName) != null) {
+                        	if(!pkgToListenerMap.get(pkgName).isEmpty()) {
+                        		pkgToListenerMap.get(pkgName).remove(l);
+                        		if(pkgToListenerMap.get(pkgName).isEmpty())
+                        			pkgToListenerMap.remove(pkgName);
+                        	}
+                        }
                         result = false;
                     }
                 } else {
+                	
+                            // Remove the added ListenerDelegate object from the map
+                	if(pkgToListenerMap.get(pkgName) != null) {
+                    	if(!pkgToListenerMap.get(pkgName).isEmpty()) {
+                    		pkgToListenerMap.get(pkgName).remove(l);
+                    		if(pkgToListenerMap.get(pkgName).isEmpty())
+                    			pkgToListenerMap.remove(pkgName);
+                    	}
+                    }
                     // weird, we couldn't add the listener
                     result = false;
                 }
@@ -362,30 +453,75 @@ public class SystemSensorManager extends SensorManager {
     /** @hide */
     @Override
     protected void unregisterListenerImpl(SensorEventListener listener, Sensor sensor) {
+    	String pkgName;
+    	// Removes the listener associated with a package
+    	
         synchronized (sListeners) {
-            final int size = sListeners.size();
-            for (int i=0 ; i<size ; i++) {
-                ListenerDelegate l = sListeners.get(i);
-                if (l.getListener() == listener) {
-                    if (sensor == null) {
-                        sListeners.remove(i);
-                        // disable all sensors for this listener
-                        for (Sensor s : l.getSensors()) {
-                            disableSensorLocked(s);
-                        }
-                    // Check if the ListenerDelegate has the sensor it is trying to unregister.
-                    } else if (l.hasSensor(sensor) && l.removeSensor(sensor) == 0) {
-                        // if we have no more sensors enabled on this listener,
-                        // take it off the list.
-                        sListeners.remove(i);
-                        disableSensorLocked(sensor);
-                    }
-                    break;
-                }
-            }
+        	final int size = sListeners.size();
+        	for (int i=0 ; i<size ; i++) {
+        		ListenerDelegate l = sListeners.get(i);
+        		if (l.getListener() == listener) {
+        			if (sensor == null) {
+        				sListeners.remove(i);
+
+        				if(mContext != null) {
+        					pkgName = mContext.getPackageName();
+        					for(Iterator<ListenerDelegate> it = pkgToListenerMap.get(pkgName).iterator(); it.hasNext();) {
+        						if(it.next().getListener() == listener) {
+        							it.remove();
+        							Log.d(TAG,"Deleting listener for pkgName" + pkgName);
+        						}
+        					}
+        					if(pkgToListenerMap.get(pkgName).isEmpty()) {
+        						pkgToListenerMap.remove(pkgName);
+       							Log.d(TAG,"Deleting entry for pkgName" + pkgName);
+        					}
+
+        				}
+        				// disable all sensors for this listener
+        				for (Sensor s : l.getSensors()) {
+        					disableSensorLocked(s);
+        				}
+        				// Check if the ListenerDelegate has the sensor it is trying to unregister.
+        			} else if (l.hasSensor(sensor) && l.removeSensor(sensor) == 0) {
+        				// if we have no more sensors enabled on this listener,
+        				// take it off the list.
+        				sListeners.remove(i);
+        				disableSensorLocked(sensor);
+        				if(mContext != null) {
+        					pkgName = mContext.getPackageName();
+        					for(Iterator<ListenerDelegate> it = pkgToListenerMap.get(pkgName).iterator(); it.hasNext();) {
+        						if(it.next().getListener() == listener) {
+        							it.remove();
+        							Log.d(TAG,"Deleting listener for pkgName" + pkgName);
+        						}
+        					}
+        					if(pkgToListenerMap.get(pkgName).isEmpty()) {
+        						pkgToListenerMap.remove(pkgName);
+       							Log.d(TAG,"Deleting entry for pkgName" + pkgName);
+        					}
+
+        				}
+        			}
+        			break;
+        		}
+        	}
         }
     }
-
+    
+    @Override
+    public HashSet<Sensor> getSensorsForPkg(String pkgName) {
+    	Log.d(TAG,"Requesting data for pkgName="+pkgName);
+    	HashSet<Sensor> hSet = new HashSet<Sensor>();
+    	HashSet<ListenerDelegate> listenerDelSet = (HashSet<ListenerDelegate>)pkgToListenerMap.get(pkgName);
+    	for(ListenerDelegate listenerDel: listenerDelSet) {
+    		for(Sensor s: listenerDel.getSensors()) {
+    			hSet.add(s);
+    		}
+    	}
+    	return hSet;
+    }
+    
     private static native void nativeClassInit();
 
     private static native int sensors_module_init();

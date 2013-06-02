@@ -268,6 +268,7 @@ class ContextImpl extends Context {
             new HashMap<String, ServiceFetcher>();
 
     private static int sNextPerContextServiceCacheIndex = 0;
+    
     private static void registerService(String serviceName, ServiceFetcher fetcher) {
         if (!(fetcher instanceof StaticServiceFetcher)) {
             fetcher.mContextCacheIndex = sNextPerContextServiceCacheIndex++;
@@ -451,7 +452,7 @@ class ContextImpl extends Context {
 
         registerService(SENSOR_SERVICE, new ServiceFetcher() {
                 public Object createService(ContextImpl ctx) {
-                    return new SystemSensorManager(ctx.mMainThread.getHandler().getLooper());
+                    return new SystemSensorManager(ctx, ctx.mMainThread.getHandler().getLooper());
                 }});
 
         registerService(STATUS_BAR_SERVICE, new ServiceFetcher() {
