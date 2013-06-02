@@ -359,6 +359,7 @@ public class SystemSensorManager extends SensorManager {
     protected boolean registerListenerImpl(SensorEventListener listener, Sensor sensor,
             int delay, Handler handler) {
         boolean result = true;
+        String pkgName = mContext.getPackageName();
         
         synchronized (sListeners) {
             // look for this listener in our list
@@ -377,7 +378,6 @@ public class SystemSensorManager extends SensorManager {
                 sListeners.add(l);
                 
                 if(mContext != null) {
-                	String pkgName = mContext.getPackageName();
                 	if(pkgToListenerMap.get(pkgName) == null)
                 		pkgToListenerMap.put(pkgName,new HashSet<ListenerDelegate>());
 
