@@ -61,6 +61,7 @@ public class SystemSensorManager extends SensorManager {
     // Context in which this instance was created
     final Context mContext;
     static HashMap<String, HashSet<ListenerDelegate>> pkgToListenerMap = new HashMap<String, HashSet<ListenerDelegate>>();
+    static HashMap<String, HashSet<Sensor>> pkgToSensorMap = new HashMap<String, HashSet<Sensor>>();
 
     /*-----------------------------------------------------------------------*/
 
@@ -359,7 +360,8 @@ public class SystemSensorManager extends SensorManager {
     protected boolean registerListenerImpl(SensorEventListener listener, Sensor sensor,
             int delay, Handler handler) {
         boolean result = true;
-        String pkgName = mContext.getPackageName();
+        boolean addListenerMap = false;
+        boolean addSensorMap = false;
         
         synchronized (sListeners) {
             // look for this listener in our list
@@ -374,86 +376,98 @@ public class SystemSensorManager extends SensorManager {
 
             // if we don't find it, add it to the list
             if (l == null) {
-                l = new ListenerDelegate(listener, sensor, handler);
-                sListeners.add(l);
-                
-                if(mContext != null) {
-                	if(pkgToListenerMap.get(pkgName) == null)
-                		pkgToListenerMap.put(pkgName,new HashSet<ListenerDelegate>());
+            	l = new ListenerDelegate(listener, sensor, handler);
+            	sListeners.add(l);
+            	addListenerMap = true;
 
-                	// Checking if the pkgName has been added 
-                	if(pkgToListenerMap.get(pkgName) != null) {
-                		pkgToListenerMap.get(pkgName).add(l); // since hashset we do not check explicitly for duplicates
-                		Log.d(TAG, "Printing Current PkgToSensorMap");
-                		for(String pName:pkgToListenerMap.keySet()) {
-                			HashSet<ListenerDelegate> hSet = (HashSet<ListenerDelegate>)pkgToListenerMap.get(pName);
-                			for(ListenerDelegate listenerDel: hSet) {
-                				for(Sensor s: listenerDel.getSensors()) {
-                					Log.d(TAG, "pkgName" + pName + ": SensorName" + s.getName());
-                				}
-                			}
-                		}
-                	}
-                }
                 // if the list is not empty, start our main thread
                 if (!sListeners.isEmpty()) {
                     if (sSensorThread.startLocked()) {
                         if (!enableSensorLocked(sensor, delay)) {
                             // oops. there was an error
                             sListeners.remove(l);
-                            // Remove the added ListenerDelegate object from the map
-                            if(pkgToListenerMap.get(pkgName) != null) {
-                            	if(!pkgToListenerMap.get(pkgName).isEmpty()) {
-                            		pkgToListenerMap.get(pkgName).remove(l);
-                            		if(pkgToListenerMap.get(pkgName).isEmpty())
-                            			pkgToListenerMap.remove(pkgName);
-                            	}
-                            }
                             result = false;
+                            addListenerMap = false;
                         }
                     } else {
                         // there was an error, remove the listener
                         sListeners.remove(l);
-                            // Remove the added ListenerDelegate object from the map
-                        if(pkgToListenerMap.get(pkgName) != null) {
-                        	if(!pkgToListenerMap.get(pkgName).isEmpty()) {
-                        		pkgToListenerMap.get(pkgName).remove(l);
-                        		if(pkgToListenerMap.get(pkgName).isEmpty())
-                        			pkgToListenerMap.remove(pkgName);
-                        	}
-                        }
                         result = false;
+                        addListenerMap = false;
                     }
                 } else {
-                	
-                            // Remove the added ListenerDelegate object from the map
-                	if(pkgToListenerMap.get(pkgName) != null) {
-                    	if(!pkgToListenerMap.get(pkgName).isEmpty()) {
-                    		pkgToListenerMap.get(pkgName).remove(l);
-                    		if(pkgToListenerMap.get(pkgName).isEmpty())
-                    			pkgToListenerMap.remove(pkgName);
-                    	}
-                    }
                     // weird, we couldn't add the listener
                     result = false;
+                    addListenerMap = false;
                 }
             } else if (!l.hasSensor(sensor)) {
-                l.addSensor(sensor);
-                if (!enableSensorLocked(sensor, delay)) {
-                    // oops. there was an error
-                    l.removeSensor(sensor);
-                    result = false;
-                }
+            	l.addSensor(sensor);
+            	addSensorMap = true;
+            	if (!enableSensorLocked(sensor, delay)) {
+            		// oops. there was an error
+            		l.removeSensor(sensor);
+            		addSensorMap = false;
+            		result = false;
+            	}
+            }
+            
+          	String packageName = mContext.getPackageName();
+            if(mContext != null) { 
+            	if(addListenerMap) { // We add maps for both listener and sensor
+            		if(pkgToListenerMap.get(packageName) == null) 
+            			pkgToListenerMap.put(packageName,new HashSet<ListenerDelegate>());
+
+            		// Checking if the packageName has been added 
+            		if(pkgToListenerMap.get(packageName) != null) {
+            			pkgToListenerMap.get(packageName).add(l); // since hashset we do not check explicitly for duplicates
+            			
+            			Log.d(TAG, "Printing Current PkgToSensorMap using pkgToListenerMap");
+            			for(String pName:pkgToListenerMap.keySet()) {
+            				HashSet<ListenerDelegate> hSet = (HashSet<ListenerDelegate>)pkgToListenerMap.get(pName);
+            				for(ListenerDelegate listenerDel: hSet) {
+            					for(Sensor s: listenerDel.getSensors()) {
+            						Log.d(TAG, "packageName = " + pName + ": SensorName = " + s.getName());
+            					}
+            				}
+            			}
+            		}
+            		
+            		if(pkgToSensorMap.get(packageName) == null)
+            			pkgToSensorMap.put(packageName, new HashSet<Sensor>());
+            		
+            		// add sensors for this listener to the packageName	
+            		if(pkgToSensorMap.get(packageName) != null) {
+            			pkgToSensorMap.get(packageName).add(sensor);
+
+            			Log.d(TAG, "Printing Current PkgToSensorMap using pkgToSensorMap");
+            			for(String pName:pkgToSensorMap.keySet()) {
+            				for(Sensor s: pkgToSensorMap.get(pName)) {
+            					Log.d(TAG, "PackageName = " + pName + ": SensorName = " + s.getName());
+            				}
+            			}
+
+            		}
+            	}
+            	if(addSensorMap) {
+            		if(pkgToSensorMap.get(packageName) != null) 
+            			pkgToSensorMap.get(packageName).add(sensor);
+
+            		Log.d(TAG, "Printing Current PkgToSensorMap using pkgToSensorMap");
+            		for(String pName:pkgToSensorMap.keySet()) {
+            			for(Sensor s: pkgToSensorMap.get(pName)) {
+            				Log.d(TAG, "PackageName = " + pName + ": SensorName = " + s.getName());
+            			}
+            		}
+            	}
             }
         }
-
         return result;
     }
 
     /** @hide */
     @Override
     protected void unregisterListenerImpl(SensorEventListener listener, Sensor sensor) {
-    	String pkgName;
+    	String packageName;
     	// Removes the listener associated with a package
     	
         synchronized (sListeners) {
@@ -463,21 +477,6 @@ public class SystemSensorManager extends SensorManager {
         		if (l.getListener() == listener) {
         			if (sensor == null) {
         				sListeners.remove(i);
-
-        				if(mContext != null) {
-        					pkgName = mContext.getPackageName();
-        					for(Iterator<ListenerDelegate> it = pkgToListenerMap.get(pkgName).iterator(); it.hasNext();) {
-        						if(it.next().getListener() == listener) {
-        							it.remove();
-        							Log.d(TAG,"Deleting listener for pkgName" + pkgName);
-        						}
-        					}
-        					if(pkgToListenerMap.get(pkgName).isEmpty()) {
-        						pkgToListenerMap.remove(pkgName);
-       							Log.d(TAG,"Deleting entry for pkgName" + pkgName);
-        					}
-
-        				}
         				// disable all sensors for this listener
         				for (Sensor s : l.getSensors()) {
         					disableSensorLocked(s);
@@ -488,38 +487,53 @@ public class SystemSensorManager extends SensorManager {
         				// take it off the list.
         				sListeners.remove(i);
         				disableSensorLocked(sensor);
-        				if(mContext != null) {
-        					pkgName = mContext.getPackageName();
-        					for(Iterator<ListenerDelegate> it = pkgToListenerMap.get(pkgName).iterator(); it.hasNext();) {
-        						if(it.next().getListener() == listener) {
-        							it.remove();
-        							Log.d(TAG,"Deleting listener for pkgName" + pkgName);
-        						}
-        					}
-        					if(pkgToListenerMap.get(pkgName).isEmpty()) {
-        						pkgToListenerMap.remove(pkgName);
-       							Log.d(TAG,"Deleting entry for pkgName" + pkgName);
-        					}
-
-        				}
         			}
         			break;
         		}
         	}
+        	if(mContext != null) {
+        		packageName = mContext.getPackageName();
+        		for(Iterator<ListenerDelegate> it = pkgToListenerMap.get(packageName).iterator(); it.hasNext();) {
+        			if(it.next().getListener() == listener) {
+        				it.remove();
+        				Log.d(TAG,"Deleting listener for packageName" + packageName);
+        			}
+        		}
+        		if(pkgToListenerMap.get(packageName).isEmpty()) {
+        			pkgToListenerMap.remove(packageName);
+        			Log.d(TAG,"Deleting entry for packageName" + packageName);
+        		}
+        	}
+
         }
     }
     
     @Override
-    public HashSet<Sensor> getSensorsForPkg(String pkgName) {
-    	Log.d(TAG,"Requesting data for pkgName="+pkgName);
+    public HashSet<Sensor> getSensorsForPkg(String packageName) {
+    	Log.d(TAG,"Requesting data for packageName="+packageName);
+    	
+    	/*
     	HashSet<Sensor> hSet = new HashSet<Sensor>();
-    	HashSet<ListenerDelegate> listenerDelSet = (HashSet<ListenerDelegate>)pkgToListenerMap.get(pkgName);
+    	HashSet<ListenerDelegate> listenerDelSet = (HashSet<ListenerDelegate>)pkgToListenerMap.get(packageName);
     	for(ListenerDelegate listenerDel: listenerDelSet) {
     		for(Sensor s: listenerDel.getSensors()) {
     			hSet.add(s);
     		}
     	}
-    	return hSet;
+    	*/
+    	return (HashSet<Sensor>)pkgToSensorMap.get(packageName);
+    }
+   
+    public void deletePkgMap(String packageName) {
+    	synchronized(pkgToSensorMap) {
+    		if(pkgToSensorMap.get(packageName) != null) {
+    			for(Iterator<Sensor> it = pkgToSensorMap.get(packageName).iterator(); it.hasNext();) {
+    				it.remove();
+    			}
+    			pkgToSensorMap.remove(packageName);
+    			Log.d(TAG, "Deleting pkgName=" + packageName + "entry from pkgToSensorMap");
+    		}
+    	}
     }
     
     private static native void nativeClassInit();

@@ -439,6 +439,13 @@ public abstract class SensorManager {
     public abstract HashSet<Sensor> getSensorsForPkg(String pkgName);
     
     /**
+     * 
+     * @param packageName
+     */
+    
+    public abstract void deletePkgMap(String packageName);
+    
+    /**
      * Registers a listener for given sensors.
      *
      * @deprecated This method is deprecated, use
